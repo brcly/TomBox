@@ -15,6 +15,7 @@ members = [
     "crates/compat/xcrdapi",
     "crates/compat/dxcompiler_xs",
     "crates/compat/acphal",
+    "crates/compat/xapu",
     "crates/compat/mfplat",
 ]
 

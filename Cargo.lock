@@ -106,6 +106,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "xapu"
+version = "0.1.0"
+dependencies = [
+ "compat-common",
+]
+
+[[package]]
 name = "xcrdapi"
 version = "0.1.0"
 dependencies = [

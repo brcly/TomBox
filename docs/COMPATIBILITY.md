@@ -32,7 +32,8 @@ no-op/offline impl to pass startup), **Translate** (reimpl that maps onto a host
 | `xmem.dll` | 10 | Memory allocator | Reimpl→VirtualAlloc2/D3D12 heaps | MED | `XMemAlloc/Virtual/PhysicalPages`; thin over ntdll |
 | `GameInput.dll` | 1 | Input (IGameInput) | Reuse PC GameInput / opt-in XInput adapter | MED | Homebrew on Proton verifies `GameInputCreate` ordinal 1, v0 polling, forward and backward history, device and reading callbacks, and two-motor `SetRumbleState` output on Linux virtual pads. Physical controllers and retail titles remain unverified. |
 | `XAudio2_9.dll` | 5 (ord #1,2,4,5,6) | Audio | Reuse PC XAudio2_9 | MED | Coin Run verifies `XAudio2Create` (#1) and two simultaneous PCM voices with stereo panning via `SetOutputMatrix`, measured by Linux loopback on Proton. Reverb (#2), effects (#4), spatial audio (#5–6) and retail playback remain unverified. |
-| `AcpHal.dll` | 6 | Xbox audio-DSP HAL | Stub/software | LOW-MED | `ApuAlloc`,`AcpHalCreate`,…; no PC ACP, route to software mix |
+| `AcpHal.dll` | 6 | Xbox audio-DSP HAL | Stub/software | LOW-MED | `ApuAlloc`,`AcpHalCreate`,…; no PC ACP, route to software mix. `IAcpHal` is a null device: commands are validated and acknowledged in order, nothing is executed. SRC and DMA SHAPE contexts are allocated; EQ, filter/volume and PCM contexts are refused. |
+| `xapu.dll` | 4 (FMOD GameCore build) | Audio-processor command queue | Refuse | LOW | `XApuConnect` fails with `E_NOTIMPL` after clearing its outputs; FMOD uses it only for hardware Opus decoding. Not imported by Fortnite. |
 | `XCRDAPI.dll` | 1 | **DirectStorage** | Reuse PC DirectStorage / Reimpl file-backed | MED | `DStorageGetFactory`; for `.ucas` IoStore streaming |
 | `dxcompiler_xs.dll` | 1 | Runtime DXIL compiler (DXC) | Reuse PC `dxcompiler.dll` | LOW-MED | `DxcCreateInstance` |
 | `xgameruntime.dll` | **dynamic** | GDK services dispatcher | Reimpl | MED-HIGH | `QueryApiImpl` dispatch; loader must intercept its LoadLibrary |

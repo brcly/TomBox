@@ -35,7 +35,7 @@ The compatibility DLLs must be built with a static CRT. Run these commands in Co
 
 ```bat
 set RUSTFLAGS=-C target-feature=+crt-static
-cargo build --release -p d3d12_xs -p xmem -p xcrdapi -p acphal -p dxcompiler_xs -p mfplat
+cargo build --release -p d3d12_xs -p xmem -p xcrdapi -p acphal -p xapu -p dxcompiler_xs -p mfplat
 ```
 
 ### Run a prepared title

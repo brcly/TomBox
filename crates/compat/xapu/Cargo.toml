@@ -1,0 +1,14 @@
+[package]
+name = "xapu"
+version = "0.1.0"
+edition = "2021"
+description = "Compat DLL for Xbox xapu.dll — audio-processor command queue (explicit refusal, no APU on the host)."
+license = "MIT OR Apache-2.0"
+
+[lib]
+name = "xapu"
+crate-type = ["cdylib"]
+path = "src/lib.rs"
+
+[dependencies]
+compat-common = { path = "../compat-common" }

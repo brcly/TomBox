@@ -1495,3 +1495,52 @@ transitioned to it, and skipped a third texture with a pending split transition.
 **Contributor’s retail run (native Windows 11, original PR).** No more device removal: one run presented 3,600+ frames in 90 s under the debug
 layer. The remaining debug-layer errors are root CBV addresses not aligned to 256 bytes,
 which this change does not address.
+
+## 2026-11-21 — AcpHal null device, SHAPE contexts and `xapu.dll`
+
+A second GDK title links FMOD's GameCore build (`fmod.dll`). It failed to load: FMOD imports
+`AcpHal` exports the shim lacked and all of `xapu.dll`. Once it loaded, `FMOD_System_Create`
+never returned, because the inert `IAcpHal` returned `S_OK` from every slot and never
+produced a message.
+
+**Evidence.** Export signatures and the `IAcpHal` vtable come from the system `AcpHal.dll`
+and `xapu.dll` of the console OS image (disassembly). Command and message semantics come from
+the callers:
+- FMOD submits cmd 2 with a fresh nonzero cookie during `FMOD_System_Create` and spins,
+  without a timeout, until a type-0x10 message carries that cookie. It counts out-of-order
+  cookies, so completions are expected in order.
+- FMOD submits cmd 1 (cookie 0) four times per mix block and counts four type-2 messages as
+  one finished block. More type-2 messages than cmd-1 submissions would drive its counter
+  negative, so type 2 is the cmd-1 completion, not a free-running tick.
+- Fortnite's XMA decode (cmd 7) waits, with a timeout, for the DSP to write a done flag into
+  the XMA context.
+- FMOD clears `count << 5` bytes after allocating SRC contexts and `count << 4` bytes after
+  DMA contexts. It never imports `ApuCreateHeap`, and it calls `XApuConnect` only from its
+  Opus codec.
+
+**Change.**
+- `acphal`: `ApuMapVirtualAddress` and `ApuIsVirtualAddressValid` (the APU address is the
+  offset inside the heap). `AcpHalReleaseShapeContexts`. `AcpHalAllocateShapeContexts` also
+  serves SRC (32-byte) and DMA (16-byte) contexts; EQ, filter/volume and PCM are still
+  refused. `ApuAlloc` creates an implicit heap when no `ApuCreateHeap` came first.
+- `acphal::hal`: `IAcpHal` follows the console vtable: `Connect`, `Disconnect`,
+  `SubmitCommand`, `PopMessage` (0x1c-byte messages), the pending-message count, release,
+  and four slots that return 0x8ac80f0e as on the console. Argument checks and error codes
+  match the system DLL. Commands with a nonzero cookie complete in order with a type-0x10
+  message carrying the cookie. cmd 1 completes with a type-2 message one audio frame after
+  the previous completion; the frame length (128 samples at 48 kHz) is an assumption. The
+  queue is bounded by the capacity passed to `Connect`. Nothing is executed and no audio is
+  produced.
+- `xapu` (new crate): `XApuConnect` clears its connection handle and 16-byte info block,
+  then fails with `E_NOTIMPL`, so FMOD's Opus codec reports an init error and other codecs
+  are unaffected. The queue calls reject handles that were never created (`E_HANDLE`).
+
+**Tests.** `acphal`: heap address queries, SHAPE context allocation and release, and for the
+null device: connect and disconnect errors, command validation, cookie completion, paced and
+ordered completions, capacity, message layout. `xapu`: cleared outputs and refused handles.
+`cargo test --release -p acphal -p xapu` passes.
+
+**In game (native Windows 11; not run under Proton).** The second title loads,
+`FMOD_System_Create` returns, and the title reaches its 3D main menu. Music was audible in
+the menu; which FMOD output path produced it was not traced. Fortnite runs to its title
+screen as before (33 graphics PSOs, 0 failures); its XMA waits still time out.

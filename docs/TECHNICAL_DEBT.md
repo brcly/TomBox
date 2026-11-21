@@ -63,7 +63,17 @@
 
 ## Audio
 
-* `acphal`: `IAcpHal` is an inert object (no SHAPE DSP): The recorded retail lobby is silent. Coin Run’s XAudio2 PCM playback is verified separately by stereo loopback.
+* `acphal`: `IAcpHal` is a null device (no SHAPE DSP): commands are acknowledged in order
+  but never executed, and title memory is never written. Waits for decoder output (XMA
+  done flags) still time out, and the recorded retail lobby is silent. Coin Run’s XAudio2
+  PCM playback is verified separately by stereo loopback.
+* `acphal`: cmd-1 completions are paced at one assumed audio frame (128 samples at 48 kHz),
+  not measured on the console. The message time field is always 0 and every status is
+  success. SHAPE context sizes for SRC (32 bytes) and DMA (16 bytes) come from a caller
+  clearing `count << 5` and `count << 4` bytes, not from the system DLL; EQ, filter/volume
+  and PCM contexts are refused.
+* `xapu`: no audio-processor queue on the host, so `XApuConnect` is refused and hardware
+  Opus decoding through FMOD is unavailable.
 
 ## Shader translator (tuxbox-xshader) — unverified assumptions
 
