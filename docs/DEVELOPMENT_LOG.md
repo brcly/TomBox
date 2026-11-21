@@ -1495,3 +1495,41 @@ transitioned to it, and skipped a third texture with a pending split transition.
 **Contributor’s retail run (native Windows 11, original PR).** No more device removal: one run presented 3,600+ frames in 90 s under the debug
 layer. The remaining debug-layer errors are root CBV addresses not aligned to 256 bytes,
 which this change does not address.
+
+## 2026-11-21 — Network guard deny mode: local-only lookups and loopback sockets
+
+A second GDK title froze, and later crashed, in deny mode while starting a UDP peer for
+local multiplayer. Deny mode replaced every resolver with a failing stub, including
+`getaddrinfo(NULL, port, AI_PASSIVE)`, which only computes the wildcard address for a local
+bind; the peer retried it on the main thread every 100 ms and never returned. With that call
+answered, deny mode still refused `connect` and `sendto` towards 127.0.0.1 and every lookup
+of the machine's own name, so the peer never came up and the title dereferenced its missing
+object.
+
+**Change.** `compat-common::net_guard`, deny mode only:
+- `getaddrinfo`, `GetAddrInfoW`, `GetAddrInfoExW` and `GetAddrInfoExA` go through a
+  trampoline and pass a null or empty node, `localhost`, IP literals and the machine's own
+  names (NetBIOS, DNS host and fully qualified names, as redirect mode already does). Every
+  other name is still refused with `WSAHOST_NOT_FOUND`.
+- `connect`, `WSAConnect`, `sendto` and `WSASendTo` go through trampolines and pass only
+  loopback destinations (127.0.0.0/8, `::1`, v4-mapped loopback), or no destination on a
+  connected socket. Every other destination fails with `WSAENETUNREACH`, and the refusal now
+  names the address.
+- `gethostbyname`, `WSAConnectByName*` and the WinHTTP entry points stay denied. If a
+  trampoline cannot be built, the entry point gets the plain failing stub, as before.
+
+**Tests.** `net_guard::tests`: which names count as local, and the destination check for
+IPv4, IPv6 and v4-mapped addresses, broadcast, multicast, wildcard, truncated and unknown
+families. `tests/net_guard_deny.rs` installs the guard in its own process and checks a
+loopback UDP round trip, a loopback TCP connection, `localhost` and literal lookups, and
+`getaddrinfo(NULL, port, AI_PASSIVE)`; `sendto` and `connect` towards 192.0.2.1
+(TEST-NET-1) fail with `WSAENETUNREACH` and a lookup of an `.invalid` name fails with
+`WSAHOST_NOT_FOUND`. The guard's log for that test lists exactly those three refusals.
+`cargo test --release -p compat-common` passes.
+
+**In game (native Windows 11; not run under Proton).** The second title gets past its peer
+startup and reaches its 3D main menu. Refused in a 60-second run: 20 WinHTTP or
+`gethostbyname` calls, two lookups of online-service names, and `sendto` towards the LAN
+broadcast address, IPv6 all-nodes multicast and the machine's own interface addresses.
+Fortnite in deny mode runs to its title screen as before, with 16 refused WinHTTP or
+`gethostbyname` calls.

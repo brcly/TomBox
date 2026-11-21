@@ -60,6 +60,11 @@
 * **Known gaps:** `ConnectEx` to a literal IP is not intercepted; isolation is in-process
   only (no OS firewall rule — the session is not elevated). A proper sandbox (AppContainer
   without network capability, or a firewall rule) would be stronger.
+* **Deny-mode pass-through (2026-11-21):** lookups of a null or empty node, `localhost`, IP
+  literals and this machine's own names go to the host resolver, and `connect`/`sendto`
+  (and the WSA forms) pass towards loopback. That Windows answers the machine's own names
+  from its interface list without a DNS query has not been checked with a packet capture.
+  `send`/`WSASend` on a socket connected through `ConnectEx` remain uncovered as before.
 
 ## Audio
 
