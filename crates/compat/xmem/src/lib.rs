@@ -25,6 +25,8 @@ extern "system" {
     fn SetLastError(error: u32);
     fn VirtualQueryEx(process: *mut c_void, addr: *const c_void, info: *mut u64, size: usize) -> usize;
 }
+const ERROR_NOT_SUPPORTED: u32 = 50;
+const ERROR_INVALID_PARAMETER: u32 = 87;
 const MEM_DECOMMIT: u32 = 0x0000_4000;
 /// Xbox title physical pages are 64 KiB.
 const XMEM_PAGE: usize = 0x1_0000;
@@ -267,14 +269,88 @@ pub extern "system" fn XMemMapPhysicalPages(
     if p.is_null() { core::ptr::null_mut() } else { va }
 }
 
+/// `BOOL XMemTransferMemory(UINT32 kind, SIZE_T bytes, ...)`: Win32-style, FALSE plus
+/// `SetLastError` on failure. It moves memory budget between the title and the console's
+/// system partition. The system `xmem.dll` checks in this order: kinds 1 and 2 fail with
+/// ERROR_NOT_SUPPORTED when an internal system query returns zero (not identified; taken
+/// as zero here); a zero byte count succeeds without work; a kind above 2 is
+/// ERROR_INVALID_PARAMETER. A PC process has no system partition, so every remaining
+/// request fails with ERROR_NOT_SUPPORTED.
+/// (Returning an HRESULT here would read as TRUE.)
 #[no_mangle]
-pub extern "system" fn XMemTransferMemory(_src: *mut c_void, _dst: *mut c_void, _size: usize) -> i32 {
-    record(M, "XMemTransferMemory", "[STUB]");
-    compat_common::E_NOTIMPL
+pub extern "system" fn XMemTransferMemory(kind: u32, bytes: usize) -> i32 {
+    let error = if kind == 1 || kind == 2 {
+        ERROR_NOT_SUPPORTED
+    } else if bytes == 0 {
+        record(M, "XMemTransferMemory", &format!("kind={kind} bytes=0: nothing to transfer -> TRUE"));
+        return 1;
+    } else if kind > 2 {
+        ERROR_INVALID_PARAMETER
+    } else {
+        ERROR_NOT_SUPPORTED
+    };
+    record(M, "XMemTransferMemory", &format!(
+        "kind={kind} bytes={bytes:#x}: no system memory partition on the host -> FALSE (error {error})"));
+    unsafe { SetLastError(error) };
+    0
 }
 
+/// Size of the statistics block for ids with class 0x1 in the top nibble; the system
+/// `xmem.dll` zeroes exactly this much before filling it.
+const WORKING_SET_STATS_CLASS1_BYTES: usize = 0x50;
+
+/// `BOOL XMemGetWorkingSetStatistics(UINT32 id, STATS* out)`: Win32-style BOOL. The
+/// console figures it reports (title working set budgets) do not exist on a PC, so this
+/// fails with ERROR_NOT_SUPPORTED. Callers that read the block without checking the
+/// result get zeros for class-1 ids, as from the system DLL's own pre-clear; other
+/// classes are left untouched because their block size is unknown.
+/// (Returning an HRESULT here would read as TRUE and expose uninitialised memory.)
 #[no_mangle]
-pub extern "system" fn XMemGetWorkingSetStatistics(_out: *mut c_void) -> i32 {
-    record(M, "XMemGetWorkingSetStatistics", "[STUB]");
-    compat_common::E_NOTIMPL
+pub extern "system" fn XMemGetWorkingSetStatistics(id: u32, out: *mut u8) -> i32 {
+    if !out.is_null() && id & 0xf000_0000 == 0x1000_0000 {
+        unsafe { core::ptr::write_bytes(out, 0, WORKING_SET_STATS_CLASS1_BYTES) };
+    }
+    record(M, "XMemGetWorkingSetStatistics", &format!(
+        "id={id:#x}: no console working-set statistics on the host -> FALSE (ERROR_NOT_SUPPORTED)"));
+    unsafe { SetLastError(ERROR_NOT_SUPPORTED) };
+    0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn working_set_statistics_fails_as_win32_bool() {
+        let mut block = [0xccu8; 0x60];
+        unsafe { SetLastError(0) };
+        assert_eq!(XMemGetWorkingSetStatistics(0x1000_0001, block.as_mut_ptr()), 0, "FALSE, not an HRESULT");
+        assert_eq!(unsafe { GetLastError() }, ERROR_NOT_SUPPORTED);
+        assert!(block[..0x50].iter().all(|&b| b == 0), "class-1 block cleared");
+        assert!(block[0x50..].iter().all(|&b| b == 0xcc), "nothing written past the block");
+
+        let mut other = [0xccu8; 0x60];
+        assert_eq!(XMemGetWorkingSetStatistics(0x2000_0001, other.as_mut_ptr()), 0);
+        assert!(other.iter().all(|&b| b == 0xcc), "unknown-size classes untouched");
+        assert_eq!(XMemGetWorkingSetStatistics(0x1000_0001, core::ptr::null_mut()), 0, "null output tolerated");
+    }
+
+    #[test]
+    fn transfer_memory_fails_as_win32_bool() {
+        // Kinds 1 and 2 fail before the byte count is looked at.
+        for kind in [1, 2] {
+            unsafe { SetLastError(0) };
+            assert_eq!(XMemTransferMemory(kind, 0), 0);
+            assert_eq!(unsafe { GetLastError() }, ERROR_NOT_SUPPORTED);
+        }
+        // An empty transfer of any other kind succeeds, even an unknown one.
+        assert_eq!(XMemTransferMemory(0, 0), 1);
+        assert_eq!(XMemTransferMemory(7, 0), 1);
+        unsafe { SetLastError(0) };
+        assert_eq!(XMemTransferMemory(7, 0x1000), 0);
+        assert_eq!(unsafe { GetLastError() }, ERROR_INVALID_PARAMETER);
+        unsafe { SetLastError(0) };
+        assert_eq!(XMemTransferMemory(0, 0x800_0000), 0);
+        assert_eq!(unsafe { GetLastError() }, ERROR_NOT_SUPPORTED);
+    }
 }

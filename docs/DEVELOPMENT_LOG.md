@@ -1495,3 +1495,35 @@ transitioned to it, and skipped a third texture with a pending split transition.
 **Contributor’s retail run (native Windows 11, original PR).** No more device removal: one run presented 3,600+ frames in 90 s under the debug
 layer. The remaining debug-layer errors are root CBV addresses not aligned to 256 bytes,
 which this change does not address.
+
+## 2026-11-21 — `XMemGetWorkingSetStatistics` and `XMemTransferMemory` return Win32 BOOLs
+
+Both shim exports returned `E_NOTIMPL` (0x80004001). The system `xmem.dll` of the console
+OS image returns a Win32 `BOOL` from both and reports failure through `SetLastError`
+(disassembly of its exports), and Fortnite tests `eax` and uses the statistics block only
+when it is nonzero. A nonzero HRESULT therefore read as TRUE, and the caller consumed a block
+the shim never wrote.
+
+**Change.** `xmem`: `XMemGetWorkingSetStatistics(id, out)` returns FALSE with
+`ERROR_NOT_SUPPORTED`; the console working-set figures it reports have no host source. For
+ids whose top nibble is 1 the system DLL clears 0x50 bytes before filling them; the shim
+clears the same range, so a caller that ignores the result reads zeros. Other id classes
+are left untouched because their block size is not established.
+`XMemTransferMemory(kind, bytes, ...)` follows the system DLL's order of checks: kinds 1
+and 2 fail with `ERROR_NOT_SUPPORTED` when an internal system query returns zero (the query
+is not identified; the shim takes it as zero), a zero byte count then succeeds without
+work, and a kind above 2 is `ERROR_INVALID_PARAMETER`. A host process has no system
+partition to move budget to, so the remaining requests fail with `ERROR_NOT_SUPPORTED`.
+
+**Tests.** `xmem::tests`: FALSE and the last error for both exports, the cleared 0x50-byte
+range (nothing written after it, other classes untouched, a null block tolerated), and the
+transfer check order. `cargo test --release -p xmem` passes.
+
+**In game (native Windows 11; not run under Proton).** Fortnite runs to its title screen as
+before (33 graphics PSOs, 0 failures). It now logs `LogRHI: Error: Xbox
+XMemGetWorkingSetStatistics failed` once per frame, which is the title's own report of the
+FALSE result; previously it read an unwritten block without a message. A second GDK title
+reaches its 3D main menu (seen on screen) and queries the statistics about 13,000 times in a 60-second run.
+Each title calls `XMemTransferMemory` once, with kind 0 and 64 MiB or 128 MiB, and continues
+after the failure. Those runs used an earlier revision that failed every transfer; for kind 0
+with a nonzero size the final check order returns the same result.

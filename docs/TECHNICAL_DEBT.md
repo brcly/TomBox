@@ -246,3 +246,11 @@ enable and retest the scoped workaround. [Configuration](RUNNING.md#gpu-resource
 - Buffer-only read bits are dropped from texture transitions; other console-only state
   combinations, if any, are not translated. Root constant-buffer views at addresses that
   are not 256-byte aligned are passed through (accepted by the console, invalid on PC).
+
+## xmem statistics and budget transfer (2026-11-21)
+- `XMemGetWorkingSetStatistics` always fails: the console working-set statistics have no
+  host equivalent and the block layout is known only by size (0x50 bytes for class-1 ids).
+  Titles that need the figures for memory budgeting get no data; Fortnite logs the failure
+  every frame.
+- `XMemTransferMemory` never moves budget. The system query that gates kinds 1 and 2 in
+  the console DLL is not identified.
