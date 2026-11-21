@@ -54,7 +54,7 @@ The steps below apply to build 2.0.1461.7919. The development scripts use machin
    (`G:\FortniteGame\Binaries\XSX\`).
 4. Copy the **real** `xg_xs.dll` from the dump (`EmbeddedXvd/Windows/System32/`) into the
    same folder. Texture layouts depend on it; do not use the stub crate of that name.
-5. To reproduce the recorded build’s offline user and store setup, create `tuxbox.cfg` beside its executable with the following line. The adapter also checks the build timestamp. Ordinary titles leave it disabled.
+5. To reproduce the recorded build’s offline user and store setup, create `tuxbox.cfg` beside its executable with the following line. The user layer finds the title’s GDK wrappers by interface and slot; the store layer also checks the build timestamp. Ordinary titles leave it disabled.
 
    ```ini
    local_user=1

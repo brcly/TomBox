@@ -11,11 +11,15 @@
 //! the title forwards to whatever backend the network policy routes it to (see
 //! `net_guard`), i.e. the project owner's own server.
 //!
-//! Mechanism — **specific to this Fortnite build** (2.0.1461.7919, PE timestamp checked):
-//! the statically linked GDK wrappers `XUser*` in the EXE (located by the build's symbol
-//! table) are redirected to the implementations below. Signatures are the public GDK ones
-//! (XUser.h / XAsync.h). Asynchronous calls are completed through the title's own
-//! `XAsyncBegin/Schedule/Complete/GetResult` wrappers, which are left untouched.
+//! Mechanism: the statically linked GDK wrappers `XUser*` in the title's EXE are redirected
+//! to the implementations below. The wrappers are located by the interface they query and
+//! the vtable slot they call (`gdk_wrappers`), not by per-build addresses, so this works
+//! for any title built against the same GDK interfaces; the names of the keys come from
+//! Fortnite 2.0.1461.7919's symbol table. Signatures are the public GDK ones (XUser.h /
+//! XAsync.h). Asynchronous calls are completed through the title's own
+//! `XAsyncBegin/Schedule/Complete/GetResult` wrappers (located the same way), which are
+//! left untouched. Without all six XAsync wrappers, or without XUserAddAsync/AddResult,
+//! nothing is redirected.
 //!
 //! Not modelled: multiple users, guests, sign-out, change-event delivery (registrations are
 //! accepted but no event is ever fired), privilege denial (every privilege is granted),
@@ -38,18 +42,36 @@ const E_INVALIDARG: i32 = 0x8007_0057u32 as i32;
 const E_NOT_SUFFICIENT_BUFFER: i32 = 0x8007_007Au32 as i32;
 const E_NOT_FOUND: i32 = 0x8007_0490u32 as i32; // HRESULT_FROM_WIN32(ERROR_NOT_FOUND); the exact GDK "user not found" code is not verified
 
-/// PE TimeDateStamp of FortniteClient-XSX-Shipping.exe 2.0.1461.7919.
+/// PE TimeDateStamp of FortniteClient-XSX-Shipping.exe 2.0.1461.7919 (gates the XStore layer,
+/// whose addresses are still build-specific).
 const BUILD_TIMESTAMP: u32 = 0x5f9b_76c4;
 
-// RVAs from the build's symbol table (`*-Symbols.bin`).
-const RVA_XASYNC_BEGIN: usize = 0x1dc87c8;
-const RVA_XASYNC_COMPLETE: usize = 0x1dc88b4;
-const RVA_XASYNC_GET_RESULT: usize = 0x1dc8928;
-const RVA_XASYNC_GET_RESULT_SIZE: usize = 0x1dc89c4;
-const RVA_XASYNC_GET_STATUS: usize = 0x1dc8a34;
-const RVA_XASYNC_SCHEDULE: usize = 0x1dc8aa4;
+use crate::gdk_wrappers::{Iface, XASYNC, XUSER, XUSER_DEVICE, XUSER_DEVICE_V2, XUSER_V2};
 
-static EXE: AtomicUsize = AtomicUsize::new(0);
+fn hex(b: &[u8]) -> String {
+    b.iter().map(|x| format!("{x:02x}")).collect()
+}
+
+/// Interface versions that share a table entry: same object, same slots and arguments.
+fn versions(iface: Iface) -> &'static [Iface] {
+    if iface == XUSER_DEVICE {
+        &[XUSER_DEVICE, XUSER_DEVICE_V2]
+    } else if iface == XUSER {
+        &[XUSER]
+    } else if iface == XUSER_V2 {
+        &[XUSER_V2]
+    } else {
+        &[XASYNC]
+    }
+}
+
+// The title's XAsync wrappers (absolute addresses), found at install.
+static XASYNC_BEGIN: AtomicUsize = AtomicUsize::new(0);
+static XASYNC_COMPLETE: AtomicUsize = AtomicUsize::new(0);
+static XASYNC_GET_RESULT: AtomicUsize = AtomicUsize::new(0);
+static XASYNC_GET_RESULT_SIZE: AtomicUsize = AtomicUsize::new(0);
+static XASYNC_GET_STATUS: AtomicUsize = AtomicUsize::new(0);
+static XASYNC_SCHEDULE: AtomicUsize = AtomicUsize::new(0);
 
 struct User {
     gamertag: String,
@@ -90,28 +112,28 @@ type Provider = unsafe extern "system" fn(op: u32, data: *const ProviderData) ->
 
 unsafe fn xasync_begin(block: *mut c_void, context: *mut c_void, identity: usize, name: &'static [u8], provider: Provider) -> i32 {
     let f: unsafe extern "system" fn(*mut c_void, *mut c_void, usize, *const u8, Provider) -> i32 =
-        core::mem::transmute(EXE.load(Ordering::Relaxed) + RVA_XASYNC_BEGIN);
+        core::mem::transmute(XASYNC_BEGIN.load(Ordering::Relaxed));
     f(block, context, identity, name.as_ptr(), provider)
 }
 unsafe fn xasync_schedule(block: *mut c_void) -> i32 {
-    let f: unsafe extern "system" fn(*mut c_void, u32) -> i32 = core::mem::transmute(EXE.load(Ordering::Relaxed) + RVA_XASYNC_SCHEDULE);
+    let f: unsafe extern "system" fn(*mut c_void, u32) -> i32 = core::mem::transmute(XASYNC_SCHEDULE.load(Ordering::Relaxed));
     f(block, 0)
 }
 pub(crate) unsafe fn xasync_complete(block: *mut c_void, hr: i32, size: usize) {
-    let f: unsafe extern "system" fn(*mut c_void, i32, usize) = core::mem::transmute(EXE.load(Ordering::Relaxed) + RVA_XASYNC_COMPLETE);
+    let f: unsafe extern "system" fn(*mut c_void, i32, usize) = core::mem::transmute(XASYNC_COMPLETE.load(Ordering::Relaxed));
     f(block, hr, size)
 }
 unsafe fn xasync_get_result(block: *mut c_void, identity: usize, size: usize, buf: *mut u8, used: *mut usize) -> i32 {
     let f: unsafe extern "system" fn(*mut c_void, usize, usize, *mut u8, *mut usize) -> i32 =
-        core::mem::transmute(EXE.load(Ordering::Relaxed) + RVA_XASYNC_GET_RESULT);
+        core::mem::transmute(XASYNC_GET_RESULT.load(Ordering::Relaxed));
     f(block, identity, size, buf, used)
 }
 unsafe fn xasync_get_result_size(block: *mut c_void, size: *mut usize) -> i32 {
-    let f: unsafe extern "system" fn(*mut c_void, *mut usize) -> i32 = core::mem::transmute(EXE.load(Ordering::Relaxed) + RVA_XASYNC_GET_RESULT_SIZE);
+    let f: unsafe extern "system" fn(*mut c_void, *mut usize) -> i32 = core::mem::transmute(XASYNC_GET_RESULT_SIZE.load(Ordering::Relaxed));
     f(block, size)
 }
 pub(crate) unsafe fn xasync_get_status(block: *mut c_void) -> i32 {
-    let f: unsafe extern "system" fn(*mut c_void, bool) -> i32 = core::mem::transmute(EXE.load(Ordering::Relaxed) + RVA_XASYNC_GET_STATUS);
+    let f: unsafe extern "system" fn(*mut c_void, bool) -> i32 = core::mem::transmute(XASYNC_GET_STATUS.load(Ordering::Relaxed));
     f(block, false)
 }
 
@@ -253,6 +275,10 @@ unsafe extern "system" fn x_find_for_device(_device: *const u8, out: *mut usize)
         return E_INVALIDARG;
     }
     *out = handle(); // every input device belongs to the one local user
+    static N: AtomicUsize = AtomicUsize::new(0);
+    if N.fetch_add(1, Ordering::Relaxed) < 4 {
+        log("XUserFindForDevice", "-> local user (every device belongs to it)");
+    }
     S_OK
 }
 
@@ -433,7 +459,82 @@ pub(crate) unsafe fn write_jump(p: *mut u8, target: usize) -> bool {
     true
 }
 
-/// The archived title adapter is opt-in and also checks the recorded build timestamp.
+/// Wrappers redirected to this module: (name, interface, vtable slot, implementation).
+/// Keys from Fortnite 2.0.1461.7919, where the symbol table names each wrapper.
+fn wrappers() -> [(&'static str, Iface, u32, usize); 28] {
+    [
+        ("XUserAddAsync", XUSER, 0x38, x_add_async as usize),
+        ("XUserAddResult", XUSER, 0x40, x_add_result as usize),
+        ("XUserCheckPrivilege", XUSER, 0xa0, x_check_privilege as usize),
+        ("XUserCloseHandle", XUSER, 0x20, x_close_handle as usize),
+        ("XUserCompare", XUSER, 0x28, x_compare as usize),
+        ("XUserDuplicateHandle", XUSER, 0x18, x_duplicate_handle as usize),
+        ("XUserFindForDevice", XUSER_DEVICE, 0x18, x_find_for_device as usize),
+        ("XUserFindUserById", XUSER, 0x60, x_find_by_id as usize),
+        ("XUserFindUserByLocalId", XUSER, 0x50, x_find_by_local_id as usize),
+        ("XUserGetGamertag", XUSER_V2, 0x18, x_get_gamertag as usize),
+        ("XUserGetId", XUSER, 0x58, x_get_id as usize),
+        ("XUserGetLocalId", XUSER, 0x48, x_get_local_id as usize),
+        ("XUserGetMaxUsers", XUSER, 0x30, x_get_max_users as usize),
+        ("XUserGetState", XUSER, 0x70, x_get_state as usize),
+        ("XUserGetTokenAndSignatureAsync", XUSER, 0xb8, x_token_async as usize),
+        ("XUserGetTokenAndSignatureResult", XUSER, 0xc8, x_token_result as usize),
+        ("XUserGetTokenAndSignatureResultSize", XUSER, 0xc0, x_token_result_size as usize),
+        ("XUserGetTokenAndSignatureUtf16Async", XUSER, 0xd0, x_token16_async as usize),
+        ("XUserGetTokenAndSignatureUtf16Result", XUSER, 0xe0, x_token16_result as usize),
+        ("XUserGetTokenAndSignatureUtf16ResultSize", XUSER, 0xd8, x_token_result_size as usize),
+        ("XUserRegisterForChangeEvent", XUSER, 0x108, x_register as usize),
+        ("XUserRegisterForDeviceAssociationChanged", XUSER_DEVICE, 0x20, x_register as usize),
+        ("XUserResolveIssueWithUiAsync", XUSER, 0xe8, x_resolve_issue_async as usize),
+        ("XUserResolveIssueWithUiResult", XUSER, 0xf0, x_resolve_result as usize),
+        ("XUserResolvePrivilegeWithUiAsync", XUSER, 0xa8, x_resolve_privilege_async as usize),
+        ("XUserResolvePrivilegeWithUiResult", XUSER, 0xb0, x_resolve_result as usize),
+        ("XUserUnregisterForChangeEvent", XUSER, 0x110, x_unregister as usize),
+        ("XUserUnregisterForDeviceAssociationChanged", XUSER_DEVICE, 0x28, x_unregister as usize),
+    ]
+}
+
+/// The title's XAsync wrappers this module calls: (name, slot, where the address goes).
+fn xasync_slots() -> [(&'static str, u32, &'static AtomicUsize); 6] {
+    [
+        ("XAsyncBegin", 0x38, &XASYNC_BEGIN),
+        ("XAsyncComplete", 0x50, &XASYNC_COMPLETE),
+        ("XAsyncGetResult", 0x58, &XASYNC_GET_RESULT),
+        ("XAsyncGetResultSize", 0x20, &XASYNC_GET_RESULT_SIZE),
+        ("XAsyncGetStatus", 0x18, &XASYNC_GET_STATUS),
+        ("XAsyncSchedule", 0x48, &XASYNC_SCHEDULE),
+    ]
+}
+
+/// Interface key of a redirected or used wrapper, by name.
+#[cfg(test)]
+pub(crate) fn key_of(name: &str) -> Option<(Iface, u32)> {
+    wrappers().iter().find(|w| w.0 == name).map(|w| (w.1, w.2))
+        .or_else(|| xasync_slots().iter().find(|x| x.0 == name).map(|x| (XASYNC, x.1)))
+}
+
+/// Fortnite 2.0.1461.7919 symbol-table addresses of the same wrappers (test reference).
+#[cfg(test)]
+pub(crate) fn fortnite_symbol_rvas() -> [(&'static str, usize); 34] {
+    [
+        ("XUserAddAsync", 0x1dcba30), ("XUserAddResult", 0x1dcbaa0), ("XUserCheckPrivilege", 0x1dcbb14),
+        ("XUserCloseHandle", 0x1dcbbb8), ("XUserCompare", 0x1dcbc10), ("XUserDuplicateHandle", 0x1dcbc84),
+        ("XUserFindForDevice", 0x1dcbcf8), ("XUserFindUserById", 0x1dcbd6c), ("XUserFindUserByLocalId", 0x1dcbde4),
+        ("XUserGetGamertag", 0x1dcbf00), ("XUserGetId", 0x1dcbfa0), ("XUserGetLocalId", 0x1dcc014),
+        ("XUserGetMaxUsers", 0x1dcc088), ("XUserGetState", 0x1dcc0ec), ("XUserGetTokenAndSignatureAsync", 0x1dcc160),
+        ("XUserGetTokenAndSignatureResult", 0x1dcc238), ("XUserGetTokenAndSignatureResultSize", 0x1dcc2dc),
+        ("XUserGetTokenAndSignatureUtf16Async", 0x1dcc350), ("XUserGetTokenAndSignatureUtf16Result", 0x1dcc428),
+        ("XUserGetTokenAndSignatureUtf16ResultSize", 0x1dcc4cc), ("XUserRegisterForChangeEvent", 0x1dcc540),
+        ("XUserRegisterForDeviceAssociationChanged", 0x1dcc5dc), ("XUserResolveIssueWithUiAsync", 0x1dcc674),
+        ("XUserResolveIssueWithUiResult", 0x1dcc6f8), ("XUserResolvePrivilegeWithUiAsync", 0x1dcc75c),
+        ("XUserResolvePrivilegeWithUiResult", 0x1dcc7f4), ("XUserUnregisterForChangeEvent", 0x1dcc858),
+        ("XUserUnregisterForDeviceAssociationChanged", 0x1dcc8d4),
+        ("XAsyncBegin", 0x1dc87c8), ("XAsyncComplete", 0x1dc88b4), ("XAsyncGetResult", 0x1dc8928),
+        ("XAsyncGetResultSize", 0x1dc89c4), ("XAsyncGetStatus", 0x1dc8a34), ("XAsyncSchedule", 0x1dc8aa4),
+    ]
+}
+
+/// Install the local user into the host EXE. Called once.
 pub fn install() {
     if crate::cfg("local_user").as_deref() != Some("1") {
         return;
@@ -445,11 +546,40 @@ pub fn install() {
         }
         let pe = core::ptr::read_unaligned(base.add(0x3c) as *const u32) as usize;
         let stamp = core::ptr::read_unaligned(base.add(pe + 8) as *const u32);
-        if stamp != BUILD_TIMESTAMP {
+        let size_of_image = core::ptr::read_unaligned(base.add(pe + 24 + 56) as *const u32) as usize;
+        let image = core::slice::from_raw_parts(base as *const u8, size_of_image);
+        let Some(found) = crate::gdk_wrappers::scan(image, &[XUSER, XUSER_V2, XUSER_DEVICE, XASYNC]) else {
+            crate::record_raw("gdk_user", "install", "host EXE headers/.pdata unreadable - local XUser layer NOT installed");
+            return;
+        };
+        // name -> unique RVA; missing and ambiguous names are reported, never guessed.
+        let unique = |iface: Iface, slot: u32| -> Result<usize, usize> {
+            let hits: Vec<u32> = found.iter().filter(|w| versions(iface).contains(&w.iface) && w.slot == slot).map(|w| w.rva).collect();
+            if hits.len() == 1 { Ok(hits[0] as usize) } else { Err(hits.len()) }
+        };
+        let mut problems = Vec::new();
+        let mut xasync = Vec::new();
+        for (name, slot, cell) in xasync_slots() {
+            match unique(XASYNC, slot) {
+                Ok(rva) => xasync.push((cell, rva)),
+                Err(n) => problems.push(format!("{name} ({n} candidates)")),
+            }
+        }
+        for name in ["XUserAddAsync", "XUserAddResult"] {
+            let (_, iface, slot, _) = wrappers().into_iter().find(|w| w.0 == name).unwrap();
+            if let Err(n) = unique(iface, slot) {
+                problems.push(format!("{name} ({n} candidates)"));
+            }
+        }
+        if !problems.is_empty() {
             crate::record_raw("gdk_user", "install", &format!(
-                "host EXE timestamp {stamp:#x} is not the known Fortnite build - local XUser layer NOT installed"));
+                "required GDK wrappers not found unambiguously: {} - local XUser layer NOT installed", problems.join(", ")));
             return;
         }
+        for (cell, rva) in xasync {
+            cell.store(base as usize + rva, Ordering::SeqCst);
+        }
+
         let gamertag = crate::cfg("gamertag").filter(|g| !g.is_empty() && g.len() <= 32 && g.is_ascii()).unwrap_or_else(|| "TomBoxPlayer".into());
         let xuid = crate::cfg("xuid").and_then(|x| x.parse::<u64>().ok()).unwrap_or(2533274790395905);
         let token = crate::cfg("xbl_token").filter(|t| !t.is_empty()).unwrap_or_else(|| format!("XBL3.0 x=tombox;local-offline-user-{xuid}"));
@@ -457,46 +587,39 @@ pub fn install() {
         t8.push(0);
         let t16: Vec<u16> = token.encode_utf16().chain(Some(0)).collect();
         let _ = USER.set(User { gamertag: gamertag.clone(), xuid, token: t8, token16: t16 });
-        EXE.store(base as usize, Ordering::SeqCst);
 
-        let table: [(&str, usize, usize); 28] = [
-            ("XUserAddAsync", 0x1dcba30, x_add_async as usize),
-            ("XUserAddResult", 0x1dcbaa0, x_add_result as usize),
-            ("XUserCheckPrivilege", 0x1dcbb14, x_check_privilege as usize),
-            ("XUserCloseHandle", 0x1dcbbb8, x_close_handle as usize),
-            ("XUserCompare", 0x1dcbc10, x_compare as usize),
-            ("XUserDuplicateHandle", 0x1dcbc84, x_duplicate_handle as usize),
-            ("XUserFindForDevice", 0x1dcbcf8, x_find_for_device as usize),
-            ("XUserFindUserById", 0x1dcbd6c, x_find_by_id as usize),
-            ("XUserFindUserByLocalId", 0x1dcbde4, x_find_by_local_id as usize),
-            ("XUserGetGamertag", 0x1dcbf00, x_get_gamertag as usize),
-            ("XUserGetId", 0x1dcbfa0, x_get_id as usize),
-            ("XUserGetLocalId", 0x1dcc014, x_get_local_id as usize),
-            ("XUserGetMaxUsers", 0x1dcc088, x_get_max_users as usize),
-            ("XUserGetState", 0x1dcc0ec, x_get_state as usize),
-            ("XUserGetTokenAndSignatureAsync", 0x1dcc160, x_token_async as usize),
-            ("XUserGetTokenAndSignatureResult", 0x1dcc238, x_token_result as usize),
-            ("XUserGetTokenAndSignatureResultSize", 0x1dcc2dc, x_token_result_size as usize),
-            ("XUserGetTokenAndSignatureUtf16Async", 0x1dcc350, x_token16_async as usize),
-            ("XUserGetTokenAndSignatureUtf16Result", 0x1dcc428, x_token16_result as usize),
-            ("XUserGetTokenAndSignatureUtf16ResultSize", 0x1dcc4cc, x_token_result_size as usize),
-            ("XUserRegisterForChangeEvent", 0x1dcc540, x_register as usize),
-            ("XUserRegisterForDeviceAssociationChanged", 0x1dcc5dc, x_register as usize),
-            ("XUserResolveIssueWithUiAsync", 0x1dcc674, x_resolve_issue_async as usize),
-            ("XUserResolveIssueWithUiResult", 0x1dcc6f8, x_resolve_result as usize),
-            ("XUserResolvePrivilegeWithUiAsync", 0x1dcc75c, x_resolve_privilege_async as usize),
-            ("XUserResolvePrivilegeWithUiResult", 0x1dcc7f4, x_resolve_result as usize),
-            ("XUserUnregisterForChangeEvent", 0x1dcc858, x_unregister as usize),
-            ("XUserUnregisterForDeviceAssociationChanged", 0x1dcc8d4, x_unregister as usize),
-        ];
+        let table = wrappers();
         let mut ok = 0;
-        let mut failed = Vec::new();
-        for (name, rva, target) in table {
-            if write_jump(base.add(rva), target) { ok += 1 } else { failed.push(name) }
+        let mut skipped = Vec::new();
+        for (name, iface, slot, target) in table {
+            match unique(iface, slot) {
+                Ok(rva) if write_jump(base.add(rva), target) => ok += 1,
+                Ok(_) => skipped.push(format!("{name} (patch failed)")),
+                Err(0) => skipped.push(format!("{name} (not linked)")),
+                Err(n) => skipped.push(format!("{name} ({n} candidates)")),
+            }
         }
-        crate::gdk_store::install(base);
+        // Wrappers of these interfaces with slots this module does not implement keep
+        // calling the real runtime, which does not know the local user handle.
+        let known: Vec<(Iface, u32)> = table.iter().flat_map(|w| versions(w.1).iter().map(move |v| (*v, w.2))).collect();
+        let mut other: Vec<String> = found.iter()
+            .filter(|w| w.iface != XASYNC && !known.contains(&(w.iface, w.slot)))
+            .map(|w| format!("{}slot {:#x} @ {:#x}", if w.iface == XUSER { String::new() } else { format!("IID {} ", hex(&w.iface.iid)) }, w.slot, w.rva))
+            .collect();
+        other.sort();
+        other.dedup();
         crate::record_raw("gdk_user", "install", &format!(
-            "local offline user installed: gamertag='{gamertag}' xuid={xuid} ({ok}/28 XUser wrappers redirected{})",
-            if failed.is_empty() { String::new() } else { format!("; FAILED: {}", failed.join(", ")) }));
+            "local offline user installed: gamertag='{gamertag}' xuid={xuid} ({ok}/{} XUser wrappers redirected{}{})",
+            table.len(),
+            if skipped.is_empty() { String::new() } else { format!("; not redirected: {}", skipped.join(", ")) },
+            if other.is_empty() { String::new() } else { format!("; unhandled XUser wrappers: {}", other.join(", ")) }));
+
+        // The XStore layer is still keyed to one build's addresses.
+        if stamp == BUILD_TIMESTAMP {
+            crate::gdk_store::install(base);
+        } else {
+            crate::record_raw("gdk_user", "install", &format!(
+                "host EXE timestamp {stamp:#x} is not Fortnite 2.0.1461.7919 - XStore layer NOT installed"));
+        }
     }
 }

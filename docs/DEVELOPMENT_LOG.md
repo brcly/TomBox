@@ -1495,3 +1495,49 @@ transitioned to it, and skipped a third texture with a pending split transition.
 **Contributor’s retail run (native Windows 11, original PR).** No more device removal: one run presented 3,600+ frames in 90 s under the debug
 layer. The remaining debug-layer errors are root CBV addresses not aligned to 256 bytes,
 which this change does not address.
+
+## 2026-11-21 — Finding GDK wrappers by interface and slot
+
+The local offline user (`local_user=1`) was installed only into the recorded Fortnite
+build, through a table of that build's wrapper addresses. A second GDK title has the same
+need: the host runtime has no user for an unregistered title, the title requires
+`XUserAddResult` to succeed, and it called `std::terminate` when it failed.
+
+**Evidence.** A GDK title does not import `XUser*` or `XAsync*` by name. Each API is a small
+wrapper in the title's image that asks `xgameruntime.dll` for an interface
+(`QueryApiImpl(&guid, &iid, &obj)`) and calls one vtable slot. Over the Fortnite EXE, a scan
+for that shape finds all 34 wrappers at exactly the addresses its symbol table names. The IID
+must be part of the key: `XUserGetGamertag` uses a later version of the same object, where
+slot 0x18 is not `XUserDuplicateHandle`.
+
+**Change.** New `compat-common::gdk_wrappers`: scans the loaded image's `.pdata` functions
+for that shape and keys each wrapper by `(GUID, IID, slot)`; a redirect therefore always
+starts at a real function entry. `gdk_user` uses it instead of the address table. It installs
+only when all six `XAsync` wrappers and `XUserAddAsync`/`XUserAddResult` are found
+unambiguously. Any other wrapper that is missing or ambiguous is skipped and logged, and so
+is every wrapper of these objects whose slot or IID the module does not implement.
+
+The second title calls `XUserFindForDevice` and the device-association registrations
+through the same object and slots (0x18, 0x20, 0x28) as Fortnite, but with another IID. With
+exact (GUID, IID) pairs those wrappers were neither redirected nor reported, so the lookup
+reached the host runtime, which does not know the local user, and the title reported its
+controller as disconnected. That second IID is now accepted wherever the first one is (same
+arguments at the same slots). The scan returns every wrapper of a requested object whatever
+IID it passes, so an unknown interface version appears in the install log instead of
+disappearing. The first four `XUserFindForDevice` calls are logged.
+
+`local_user=1` stays opt-in. The XStore layer still uses build-specific addresses and stays
+gated on the Fortnite build timestamp.
+
+**Tests.** `gdk_wrappers::tests`: a slot with a separate IID, IID equal to GUID with a disp32
+slot, the interface version as part of the key, rejection of non-wrappers, `.pdata` bounds,
+and a known object's wrapper under another IID. The opt-in check over a real title,
+`TOMBOX_FORTNITE_EXE=<path> cargo test --release -p compat-common --lib -- --ignored`, finds
+every Fortnite wrapper at its symbol address. `cargo test --release -p compat-common` passes.
+
+**In game (native Windows 11; not run under Proton).** Fortnite: 28/28 `XUser` wrappers
+redirected, as with the address table; it reaches its title screen. One unhandled wrapper is
+reported (slot 0x30 of a third IID). Second title: 22/28 redirected (the other six are not
+linked into it), `XUserAddResult` succeeds and it reaches its 3D main menu. With the second
+IID accepted, the title keeps its controller and the menus respond to it. One unhandled
+wrapper is reported (`XUser` slot 0x68).

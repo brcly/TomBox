@@ -246,3 +246,15 @@ enable and retest the scoped workaround. [Configuration](RUNNING.md#gpu-resource
 - Buffer-only read bits are dropped from texture transitions; other console-only state
   combinations, if any, are not translated. Root constant-buffer views at addresses that
   are not 256-byte aligned are passed through (accepted by the console, invalid on PC).
+
+## GDK wrapper discovery (2026-11-21)
+- Wrappers are recognised by one instruction shape (interface query, vtable call, release)
+  inside a `.pdata` function. A wrapper that is inlined or compiled in another order is not
+  found; the API then stays with the host runtime and the install log names it.
+- Key names come from one title's symbol table. Wrappers for slots without a name are only
+  reported: slot 0x68 of `XUser` in a second title, and slot 0x30 of a device-association
+  interface with a third IID in Fortnite. Their APIs are not identified.
+- `XUserFindForDevice` assigns every input device to the one local user. Several local
+  users are not modelled.
+- The XStore layer still uses build-specific addresses and is installed only for the
+  recorded Fortnite build.

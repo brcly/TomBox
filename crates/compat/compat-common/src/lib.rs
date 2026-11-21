@@ -27,6 +27,7 @@ pub mod net_guard;
 pub mod gdk_user;
 pub mod gdk_store;
 pub mod locale;
+pub(crate) mod gdk_wrappers;
 
 /// Read the title's configuration, allowing older installs to keep their original file.
 pub fn cfg(key: &str) -> Option<String> {
