@@ -1495,3 +1495,26 @@ transitioned to it, and skipped a third texture with a pending split transition.
 **Contributor’s retail run (native Windows 11, original PR).** No more device removal: one run presented 3,600+ frames in 90 s under the debug
 layer. The remaining debug-layer errors are root CBV addresses not aligned to 256 bytes,
 which this change does not address.
+
+## 2026-11-21 — Closing the game window ends the title
+
+A second GDK title presents into its own window and ignores `WM_CLOSE`, so its close button
+and Alt+F4 did nothing. A console title has no reason to handle the message. The separate
+host window (`TOMBOX_OWN_WINDOW=1`) passed it to `DefWindowProc`, which destroys the window
+and leaves the title running without one.
+
+**Change.** `d3d12_xs::present`: the host has no system UI that quits a title, so `WM_CLOSE`
+ends the process (`TerminateProcess`, exit code 0) with a log line. The title's window
+procedure is subclassed for this one message; every other message reaches it unchanged.
+The host window handles the message the same way. The title gets no suspend or exit
+notification first, so unsaved progress is lost.
+
+**Tests.** `present::close_tests`: the test re-runs itself as a child process that creates
+a window whose procedure ignores `WM_CLOSE`, applies the hook, checks that another message
+still reaches the original procedure with its result, and posts `WM_CLOSE`. The parent
+checks that the child ended with code 0 before the test harness printed its summary; any
+other path in the child exits with a distinct nonzero code. `cargo test --release -p d3d12_xs`
+passes.
+
+**In game (native Windows 11; not run under Proton).** The second title's close button ends
+it, and the log records the request. The host-window path was not run.

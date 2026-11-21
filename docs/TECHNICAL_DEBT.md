@@ -246,3 +246,8 @@ enable and retest the scoped workaround. [Configuration](RUNNING.md#gpu-resource
 - Buffer-only read bits are dropped from texture transitions; other console-only state
   combinations, if any, are not translated. Root constant-buffer views at addresses that
   are not 256-byte aligned are passed through (accepted by the console, invalid on PC).
+
+## Window close (2026-11-21)
+- `WM_CLOSE` terminates the title immediately. No suspend, constrained or exit notification
+  is delivered first, so a title cannot save. Whether a console title expects a lifecycle
+  notification before it is closed from the system UI has not been established.
